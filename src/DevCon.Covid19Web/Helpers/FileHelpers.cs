@@ -1,4 +1,5 @@
-﻿using System;
+﻿using DevCon.Covid19Web.Data;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -11,14 +12,16 @@ namespace DevCon.Covid19Web.Helpers
         public static string GetAbsolutePath(string relativePath)
 
         {
-
+            /*
             FileInfo _dataRoot = new FileInfo(typeof(Program).Assembly.Location);
 
             string assemblyFolderPath = _dataRoot.Directory.FullName;
 
             string fullPath = Path.Combine(assemblyFolderPath, relativePath);
 
-            return fullPath;
+            return fullPath;*/
+            var file = System.IO.Path.Combine(AppConstants.WebRootPath, relativePath);
+            return file;
 
         }
     }

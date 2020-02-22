@@ -1,0 +1,248 @@
+﻿@page "/covid-19-map"
+@page "/"
+
+@using GoogleMapsComponents
+@using GoogleMapsComponents.Maps
+@inject IJSRuntime IJS
+@inject Covid19Web.Data.Covid19InfoService service
+@inject Covid19Web.Helpers.BlazorTimer Timer
+@using Covid19Web.Data
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h3>Covid 19 Map</h3>
+            
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-12 mb-2">
+            <GoogleMap @ref="@map1" Id="map1" Options="@mapOptions" Height="700" OnAfterInit="@(async () => await OnAfterInitAsync())"></GoogleMap>
+            <button class="btn btn-info mt-3" @onclick="SetArea">Set Area</button>
+            <button class="btn btn-danger mt-3" @onclick="ClearArea">Clear Area</button>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-12">
+            <h5 class="alert alert-info mb-2">
+                @Status
+            </h5>
+            <p>
+                Click on the map to set area of observation (geo fence).
+            </p>
+        </div>
+    </div>
+
+
+</div>
+
+
+
+@code {
+    int CounterDot = 0;
+    InfoWindow infoWindow;
+    private GoogleMap map1;
+    private MapOptions mapOptions;
+    public string Status { get; set; }
+
+    Polyline poly;
+    Polygon SelectedArea;
+    List<LatLngLiteral> pathList;
+    List<LatLngLiteral> AreaObservation;
+    List<Covid19Summary> CovidArea;
+    List<Marker> MapMarkers;
+    async Task SetArea()
+    {
+        if (pathList != null && pathList.Count > 2)
+        {
+            if (AreaObservation == null)
+                AreaObservation = new List<LatLngLiteral>();
+            else AreaObservation.Clear();
+            foreach (var item in pathList)
+            {
+                AreaObservation.Add(item);
+            }
+            var newPathList = new List<LatLngLiteral>(pathList);
+            newPathList.Add(pathList[0]);
+            await poly.SetPath(newPathList);
+
+            if (SelectedArea == null)
+            {
+                SelectedArea = await Polygon.CreateAsync(IJS);
+                await SelectedArea.SetMap(map1.InteropObject);
+                await SelectedArea.SetOptions(new PolygonOptions() { StrokeColor = "#2ECC71", StrokeOpacity = 0.8f, StrokeWeight = 3, FillColor = "#EAFAF1", FillOpacity = 0.3f });
+            }
+
+            await SelectedArea.SetPath(newPathList);
+            await RefreshData(true);
+
+            Console.WriteLine("area has been set.");
+        }
+
+    }
+
+    async Task ClearArea()
+    {
+        if (pathList != null)
+        {
+            pathList.Clear();
+            await poly.SetPath(pathList);
+        }
+        if (SelectedArea != null)
+        {
+            await SelectedArea.SetMap(null);
+            SelectedArea = null;
+        }
+        if (AreaObservation != null)
+        {
+            AreaObservation.Clear();
+            AreaObservation = null;
+            await RefreshData(true);
+        }
+
+    }
+    protected override void OnInitialized()
+    {
+        mapOptions = new MapOptions()
+        {
+            Zoom = 4,
+            Center = new LatLngLiteral()
+            {
+                Lat = 30.58333,
+                Lng = 114.26667
+            },
+            MapTypeId = MapTypeId.Sattellite
+        };
+
+
+    }
+
+    async Task RefreshData(bool SetGeoFence = false)
+    {
+        if (!SetGeoFence)
+        {
+            Status = "Fetching Data from server...";
+            StateHasChanged();
+
+            //get data from server
+            if (CovidArea == null)
+            {
+                MapMarkers = new List<Marker>();
+
+            }
+            else
+            {
+                //clear markers
+                foreach (var mark in MapMarkers)
+                {
+                    await mark.SetMap(null);
+                }
+                MapMarkers.Clear();
+            }
+            CovidArea = await service.GetSummaryAsync(); //get all data
+                                                         //checked if user set geofence
+            var filtered = AreaObservation != null ? CovidArea.Where(x => Helpers.GeoHelpers.IsPointInPolygon(new LatLngLiteral() { Lat = x.Lat, Lng = x.Lon }, AreaObservation)).ToList() : CovidArea;
+
+            foreach (var item in filtered)
+            {
+                var marker = await Marker.CreateAsync(IJS);
+                await marker.SetPosition(new LatLngLiteral() { Lat = item.Lat, Lng = item.Lon });
+                await marker.SetMap(map1.InteropObject);
+                await marker.AddListener<MouseEvent>("click", async (x) => await showInfo(x, item.No));
+                MapMarkers.Add(marker);
+            }
+            Status = "Data has been loaded.";
+            StateHasChanged();
+        }
+        else
+        {
+            //get data from server
+            if (CovidArea != null && MapMarkers != null)
+            {
+                //clear markers
+                foreach (var mark in MapMarkers)
+                {
+                    await mark.SetMap(null);
+                }
+                MapMarkers.Clear();
+                var filtered = AreaObservation != null ? CovidArea.Where(x => Helpers.GeoHelpers.IsPointInPolygon(new LatLngLiteral() { Lat = x.Lat, Lng = x.Lon }, AreaObservation)).ToList() : CovidArea;
+
+                foreach (var item in filtered)
+                {
+                    var marker = await Marker.CreateAsync(IJS);
+                    await marker.SetPosition(new LatLngLiteral() { Lat = item.Lat, Lng = item.Lon });
+                    await marker.SetMap(map1.InteropObject);
+                    await marker.AddListener<MouseEvent>("click", async (x) => await showInfo(x, item.No));
+                    MapMarkers.Add(marker);
+                }
+                Status = "Geo fence has been applied.";
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task OnAfterInitAsync()
+    {
+
+        poly = await Polyline.CreateAsync(IJS);
+        await poly.SetMap(map1.InteropObject);
+        await map1.InteropObject.AddListener<PolyMouseEvent>("click", async (x) => { await addLatLng(x); });
+        infoWindow = await InfoWindow.CreateAsync(IJS);
+
+        Timer.SetTimer(60000 * 60); //update date per hour
+        Timer.OnElapsed += UpdateDataFromGit;
+        UpdateDataFromGit();
+
+        await RefreshData();
+    }
+    async void UpdateDataFromGit()
+    {
+        //put the implementation here to retrieve the latest data
+
+        Status = "Data updated from server";
+
+    }
+    async Task addLatLng(PolyMouseEvent e)
+    {
+        CounterDot++;
+        if (pathList == null)
+            pathList = new List<LatLngLiteral>();
+        if (AreaObservation != null)
+        {
+            AreaObservation = null;
+            pathList.Clear();
+            if (SelectedArea != null)
+            {
+                await SelectedArea.SetMap(null);
+                SelectedArea = null;
+            }
+        }
+
+        pathList.Add(e.LatLng);
+
+        // Because path is an MVCArray, we can simply append a new coordinate
+        // and it will automatically appear.
+        await poly.SetPath(pathList);
+
+    }
+
+
+    async Task showInfo(MouseEvent e, int No)
+    {
+
+        var item = CovidArea.Where(x => x.No == No).FirstOrDefault();
+        var title = $"Country : {item.Country}<br/>";
+        title += $"Province : {item.Province}<br/>";
+        title += $"Death: {item.Death.ToString("N0")}<br/>";
+        title += $"Recovered: {item.Recovered.ToString("N0")}<br/>";
+        title += $"Confirmed: {item.Confirmed.ToString("N0")} cases<br/>";
+        title += $"Last Update: {item.LastUpdate.ToString("dd/MMM/yyyy HH:mm")}<br/>";
+
+        var contentString = $"{title}";
+        await infoWindow.SetContent(contentString);
+        await infoWindow.SetPosition(e.LatLng);
+        await infoWindow.Open(map1.InteropObject);
+    }
+
+
+}
